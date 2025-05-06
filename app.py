@@ -28,21 +28,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Templates
-templates = Jinja2Templates(directory="templates")
-
 # Configuration
 UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "static/uploads")
 OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", "static/output")
+STATIC_DIR = "static"
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 MAX_FILE_SIZE = int(os.getenv("MAX_FILE_SIZE", 5 * 1024 * 1024))  # 5MB default
 
-# Ensure directories exist
+# Create static directories if they don't exist
+os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+# Templates
+templates = Jinja2Templates(directory="templates")
 
 # Cache setup (TTL: 1 hour)
 cache = TTLCache(maxsize=100, ttl=3600)
@@ -124,7 +126,6 @@ async def face_swap(source_image: str, dest_image: str, source_face_idx: int = 1
             return "Invalid input files"
 
         # Placeholder: Replace with actual face-swap logic (e.g., Gradio client)
-        # For now, we'll copy the source image as a mock result
         unique_filename = f"face_swap_{uuid.uuid4().hex}.png"
         final_path = save_output_image(source_image, OUTPUT_FOLDER, unique_filename)
         if final_path:
