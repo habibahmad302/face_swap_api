@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageEnhance
 from cachetools import TTLCache
+from gradio_client import Client, handle_file
+from retry import retry
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -119,18 +121,29 @@ def cleanup_output_folder(max_age_seconds: int = 3600):
     except Exception as e:
         logger.error(f"Output folder cleanup failed: {str(e)}")
 
+@retry(tries=3, delay=2, backoff=2)
 async def face_swap(source_image: str, dest_image: str, source_face_idx: int = 1, dest_face_idx: int = 1) -> str:
-    """Perform face swap (simplified placeholder)."""
+    """Perform face swap using Gradio Client with retry logic."""
     try:
         if not all([validate_file(source_image), validate_file(dest_image)]):
             return "Invalid input files"
 
-        # Placeholder: Replace with actual face-swap logic (e.g., Gradio client)
-        unique_filename = f"face_swap_{uuid.uuid4().hex}.png"
-        final_path = save_output_image(source_image, OUTPUT_FOLDER, unique_filename)
-        if final_path:
-            return final_path
-        return "Failed to save output"
+        client = Client("Dentro/face-swap")
+        result = client.predict(
+            sourceImage=handle_file(source_image),
+            sourceFaceIndex=source_face_idx,
+            destinationImage=handle_file(dest_image),
+            destinationFaceIndex=dest_face_idx,
+            api_name="/predict"
+        )
+
+        if result and os.path.exists(result):
+            unique_filename = f"face_swap_{uuid.uuid4().hex}.png"
+            final_path = save_output_image(result, OUTPUT_FOLDER, unique_filename)
+            if final_path:
+                return final_path
+            return "Failed to save output"
+        return "Face swap failed"
     except Exception as e:
         logger.error(f"Face swap failed: {str(e)}")
         return f"Error: {str(e)}"
@@ -146,14 +159,18 @@ async def swap_faces(
     background_tasks: BackgroundTasks = None
 ):
     """Swap faces between two uploaded images."""
+    logger.info("Received request to swap faces")
+    
     # Validate file uploads
     if not source_image.filename or not dest_image.filename:
+        logger.error("No file selected")
         return JSONResponse(
             status_code=400,
             content={"success": False, "data": None, "error": "No file selected"}
         )
 
     if not (allowed_file(source_image.filename) and allowed_file(dest_image.filename)):
+        logger.error("Invalid file format")
         return JSONResponse(
             status_code=400,
             content={"success": False, "data": None, "error": "Invalid file format. Only PNG, JPG, JPEG allowed"}
@@ -165,12 +182,14 @@ async def swap_faces(
     source_size = len(source_content)
     dest_size = len(dest_content)
     if source_size > MAX_FILE_SIZE or dest_size > MAX_FILE_SIZE:
+        logger.error(f"File size exceeds limit: {MAX_FILE_SIZE / (1024 * 1024)}MB")
         return JSONResponse(
             status_code=400,
             content={"success": False, "data": None, "error": f"File size exceeds {MAX_FILE_SIZE / (1024 * 1024)}MB"}
         )
 
     # Compress file contents
+    logger.info("Compressing images")
     source_content = compress_image(source_content)
     dest_content = compress_image(dest_content)
 
@@ -180,6 +199,7 @@ async def swap_faces(
     # Check cache
     if cache_key in cache:
         result_url = f"/{cache[cache_key]}"
+        logger.info(f"Cache hit: {result_url}")
         background_tasks.add_task(cleanup_output_folder)
         return {"success": True, "data": {"result_image": result_url}, "error": None}
 
@@ -191,14 +211,17 @@ async def swap_faces(
         dest_path = os.path.join(temp_dir, dest_filename)
 
         # Write compressed files
+        logger.info("Writing temporary files")
         with open(source_path, "wb") as f:
             f.write(source_content)
         with open(dest_path, "wb") as f:
             f.write(dest_content)
 
         # Perform face swap
+        logger.info("Performing face swap")
         result = await face_swap(source_path, dest_path)
         if result.startswith("Error") or result in ["Invalid input files", "Failed to save output"]:
+            logger.error(f"Face swap error: {result}")
             return JSONResponse(
                 status_code=500,
                 content={"success": False, "data": None, "error": result}
@@ -206,10 +229,12 @@ async def swap_faces(
 
         # Cache result
         cache[cache_key] = result
+        logger.info(f"Cached result: {result}")
 
         # Schedule cleanup
         background_tasks.add_task(cleanup_output_folder)
 
         # Return result
         result_url = f"/{result}"
+        logger.info(f"Returning result: {result_url}")
         return {"success": True, "data": {"result_image": result_url}, "error": None}
