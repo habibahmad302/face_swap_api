@@ -8,12 +8,13 @@ from pathlib import Path
 from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image, ImageEnhance
 from cachetools import TTLCache
 from gradio_client import Client, handle_file
 from retry import retry
+from starlette.responses import Response
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +22,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-# CORS Middleware for frontend compatibility
+# CORS Middleware for API endpoints
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Adjust to specific domains in production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -42,8 +43,18 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+# Custom StaticFiles class to add CORS headers
+class CORSStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        # Add CORS headers to static file responses
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        return response
+
+# Mount static files with CORS support
+app.mount("/static", CORSStaticFiles(directory=STATIC_DIR), name="static")
 
 # Templates
 templates = Jinja2Templates(directory="templates")
